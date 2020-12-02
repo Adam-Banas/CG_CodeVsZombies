@@ -26,7 +26,7 @@ using std::vector;
 //--------------------------------- Configuration -------------------------------
 //-------------------------------------------------------------------------------
 
-constexpr int TIMEOUT = 90;
+constexpr int TIMEOUT = 98;
 
 //-------------------------------------------------------------------------------
 //----------------------------------- Constants ---------------------------------
@@ -36,6 +36,7 @@ constexpr int ASH_SPEED    = 1000;
 constexpr int SHOT_RANGE   = 2000;
 constexpr int SHOT_RANGE2  = SHOT_RANGE * SHOT_RANGE;
 constexpr int ZOMBIE_SPEED = 400;
+constexpr double PI        = std::acos(-1);
 
 //-------------------------------------------------------------------------------
 //----------------------------------- Utilities ---------------------------------
@@ -49,6 +50,18 @@ inline auto& debugLog() noexcept
     static std::stringstream sink;
     return sink;
 #endif
+}
+
+int fibonacci[20];
+
+void initializeFibonacci() noexcept
+{
+    fibonacci[0] = 1;
+    fibonacci[1] = 2;
+    for (int i = 2; i < 20; ++i)
+    {
+        fibonacci[i] = fibonacci[i - 1] + fibonacci[i - 2];
+    }
 }
 
 // Returns a random number in [min, max]
@@ -74,18 +87,23 @@ public:
     constexpr explicit Point(int x = 0, int y = 0) noexcept : x(x), y(y) {}
 
 public:
-    uint x;
-    uint y;
+    int x;
+    int y;
 };
 
-bool operator==(const Point& lhs, const Point& rhs)
+bool operator==(const Point& lhs, const Point& rhs) noexcept
 {
     return lhs.x == rhs.x && lhs.y == rhs.y;
 }
 
-bool operator!=(const Point& lhs, const Point& rhs)
+bool operator!=(const Point& lhs, const Point& rhs) noexcept
 {
     return !(lhs == rhs);
+}
+
+auto operator+(const Point& lhs, const Point& rhs) noexcept
+{
+    return Point(lhs.x + rhs.x, lhs.y + rhs.y);
 }
 
 // NOTICE: Needed for sorting algorithms
@@ -138,6 +156,27 @@ auto toString(const Point& rhs)
     result = std::to_string(rhs.x) + " " + std::to_string(rhs.y);
 
     return result;
+}
+
+Point randomMove()
+{
+    auto randomDistance = randomNumber(0, ASH_SPEED);
+    auto randomAngle    = randomNumber(0, 359) * PI / 180;
+    return Point(randomDistance * sin(randomAngle),
+                 randomDistance * cos(randomAngle));
+}
+
+Point randomPosition(const Point& position)
+{
+    auto result = position + randomMove();
+    result.x = std::clamp(result.x, 0, 18000);
+    result.y = std::clamp(result.y, 0, 9000);
+    return result;
+}
+
+bool flipCoin() noexcept
+{
+    return randomNumber(0, 1) == 1;
 }
 
 std::chrono::high_resolution_clock::time_point turnStart;
@@ -271,6 +310,15 @@ public:
                             [id](const auto& elem) { return elem.id == id; });
     }
 
+    auto getScore() const noexcept
+    {
+        if (humans.empty())
+        {
+            return 0;
+        }
+        return score;
+    }
+
 private:
     void simulateZombiesMovement() noexcept
     {
@@ -308,12 +356,17 @@ private:
 
     void simulateAshShot() noexcept
     {
+        constexpr int ZOMBIE_BASE_SCORE = 10;
+        int zombiesKilled               = 0;
+        auto zombieScore = humans.size() * humans.size() * ZOMBIE_BASE_SCORE;
         for (int i = zombies.size() - 1; i >= 0; --i)
         {
             if (ash.isInShootingRange(zombies.at(i)))
             {
-//                debugLog() << "Ash shoots zombie " << zombies.at(i).id << endl;
+                //                debugLog() << "Ash shoots zombie " <<
+                //                zombies.at(i).id << endl;
                 zombies.erase(begin(zombies) + i);
+                score += zombieScore * fibonacci[zombiesKilled++];
             }
         }
     }
@@ -327,8 +380,9 @@ private:
             {
                 if (human.position == zombie.position)
                 {
-//                    debugLog() << "Zombie " << zombie.id << " eats human "
-//                               << human.id << endl;
+                    //                    debugLog() << "Zombie " << zombie.id
+                    //                    << " eats human "
+                    //                               << human.id << endl;
                     humans.erase(begin(humans) + i);
                     break;
                 }
@@ -340,6 +394,8 @@ public:
     Ash ash;
     vector<Human> humans;
     vector<Zombie> zombies;
+
+private:
     int score;
 };
 
@@ -460,7 +516,7 @@ public:
         while (msPassed() < TIMEOUT)
         {
             ++states;
-//            debugLog() << "states: " << states << endl;
+            //            debugLog() << "states: " << states << endl;
             current = oneSimulation(state);
             if (current.first > best.first)
             {
@@ -476,13 +532,22 @@ private:
     {
         Point result;
         bool firstTurn = true;
+
+        if (flipCoin())
+        {
+            result = randomPosition(state.ash.position);
+            state.simulateTurn(result);
+            firstTurn = false;
+        }
+
         auto killOrder = state.zombies;
         std::random_shuffle(begin(killOrder), end(killOrder));
 
         int i = 0;
         while (!(state.humans.empty() || state.zombies.empty()))
         {
-//            debugLog() << "i: " << i << ", state: " << state << endl << endl;
+            //            debugLog() << "i: " << i << ", state: " << state <<
+            //            endl << endl;
             while (!killOrder.empty()
                    && !state.isZombieAlive(killOrder.back().id))
             {
@@ -499,7 +564,7 @@ private:
             ++i;
         }
 
-        return {state.humans.size(), result};
+        return {state.getScore(), result};
     }
 };
 
@@ -513,6 +578,9 @@ private:
 
 int main()
 {
+    initializeFibonacci();
+    int score(0);
+
     ai::MonteCarlo monteCarlo;
     std::chrono::duration<double, std::milli> lastTurnTime;
     while (true)
@@ -520,9 +588,16 @@ int main()
         auto state = view::readTurnInput(std::cin);
         debugLog() << "Last turn time: " << lastTurnTime.count() << " ms"
                    << endl;
+        debugLog() << "Score: " << score << endl;
         turnStart = std::chrono::high_resolution_clock::now();
 
-        cout << monteCarlo.calcMove(state) << endl;
+        auto move = monteCarlo.calcMove(state);
+
+        cout << move << endl;
+
+        state.simulateTurn(move);
+
+        score += state.getScore();
 
         lastTurnTime = std::chrono::high_resolution_clock::now() - turnStart;
     }
@@ -577,11 +652,11 @@ public:
         }
         if (state.humans.front().id != 0)
         {
-//            cout << state << endl;
+            //            cout << state << endl;
             cout << "Wrong human eaten\n";
             return false;
         }
-//        cout << state << endl;
+        //        cout << state << endl;
         return true;
     }
 
@@ -604,8 +679,39 @@ public:
             cout << "Wrong zombie shot\n";
             return false;
         }
-//        cout << state << endl;
+        //        cout << state << endl;
         return true;
+    }
+
+    static bool randomMoveTest()
+    {
+        bool firstQ = false, secondQ = false, thirdQ = false, fourthQ = false;
+
+        for (int i = 0; i < 10000; ++i)
+        {
+            auto move = randomMove();
+            if (move.x > 0 && move.y > 0)
+            {
+                firstQ = true;
+            }
+            else if (move.x > 0 && move.y < 0)
+            {
+                secondQ = true;
+            }
+            else if (move.x < 0 && move.y < 0)
+            {
+                thirdQ = true;
+            }
+            else if (move.x < 0 && move.y > 0)
+            {
+                fourthQ = true;
+            }
+            if (firstQ && secondQ && thirdQ && fourthQ)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -621,6 +727,9 @@ int main()
 
     result = Test::ashShootZombieTest();
     cout << "Ash shoot zombie test result: " << std::boolalpha << result << endl;
+
+    result = Test::randomMoveTest();
+    cout << "Random move test result: " << std::boolalpha << result << endl;
 }
 
 #endif
